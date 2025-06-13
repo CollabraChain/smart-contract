@@ -1,0 +1,7 @@
+# CollabraChain Deployment Info
+Chain ID: 84532
+Block Number: 27581054
+Deployer: 0xDD326a170d4218a68f0dB7C602A94c78e6671f2f
+CollabraChainReputation: 0x0B9E938e8CFE6E78066D92f4BBfB23fD4B22493c
+CollabraChainFactory: 0x87BF546a3818bE3754939d76315619F5d67b340a
+Deployment Date: 1750930396
