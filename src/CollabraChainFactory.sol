@@ -1,69 +1,146 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import "@openzeppelin/contracts/access/AccessControl.sol";
-import "./CollabraChainProject.sol";
+import {CollabraChainProject} from "./CollabraChainProject.sol";
+import {IReputation} from "./interface/IReputation.sol";
 
-contract CollabraChainFactory is AccessControl {
-    bytes32 public constant AGENT_ROLE = keccak256("AGENT_ROLE");
-
-    address[] public allProjects;
-    mapping(address => address[]) public projectsByClient;
-    mapping(address => address[]) public projectsByFreelancer;
-
-    address public immutable usdcTokenAddress;
-    address public immutable reputationContractAddress;
-
+/**
+ * @title CollabraChainFactory
+ * @author Your Name
+ * @notice Factory for creating projects and controller for minting reputation tokens.
+ */
+contract CollabraChainFactory {
+    // --- Events ---
     event ProjectCreated(
         address indexed projectAddress,
-        address indexed client,
-        address indexed freelancer
+        address indexed creator,
+        string title,
+        string category,
+        uint256 totalBudget,
+        uint256 deadline,
+        string projectScopeCID,
+        string xmtpRoomId
     );
 
-    constructor(
-        address _usdcAddress,
-        address _reputationAddress,
-        address initialAdmin,
-        address initialAgent
-    ) {
-        usdcTokenAddress = _usdcAddress;
-        reputationContractAddress = _reputationAddress;
-        _grantRole(DEFAULT_ADMIN_ROLE, initialAdmin);
-        _grantRole(AGENT_ROLE, initialAgent);
+    // --- State Variables ---
+    address[] public allProjects;
+    IReputation public immutable reputationContract;
+    address public immutable usdcToken;
+    mapping(address => bool) public isProject; // Mapping to verify valid projects
+    mapping(string => address[]) public projectsByXmtpRoom; // Mapping XMTP roomId to project addresses
+    mapping(address => string) public projectToXmtpRoom; // Mapping project address to XMTP roomId
+
+    // --- Errors ---
+    error ZeroAddress();
+    error UnauthorizedProject();
+
+    /**
+     * @param _reputationContract The address of the deployed Reputation SBT contract.
+     * @param _usdcToken The address of the USDC token contract.
+     */
+    constructor(address _reputationContract, address _usdcToken) {
+        if (_reputationContract == address(0)) revert ZeroAddress();
+        if (_usdcToken == address(0)) revert ZeroAddress();
+        reputationContract = IReputation(_reputationContract);
+        usdcToken = _usdcToken;
     }
 
+    /**
+     * @notice Creates a new Project, open for applications.
+     * @dev Epic: Project Lifecycle Management - Project Creation
+     */
     function createProject(
-        address _client,
-        address _freelancer,
-        string[] memory _milestoneDescriptions,
-        uint256[] memory _milestoneAmounts
-    ) external onlyRole(AGENT_ROLE) returns (address) {
+        string memory _title,
+        string memory _description,
+        string memory _category,
+        string[] memory _skillsRequired,
+        uint256 _totalBudget,
+        uint256 _deadline,
+        string memory _projectScopeCID,
+        string memory _xmtpRoomId
+    ) public returns (address projectAddress) {
         CollabraChainProject newProject = new CollabraChainProject(
-            _client,
-            _freelancer,
-            msg.sender, // The agent calling this function is set as the project's agent
-            usdcTokenAddress,
-            reputationContractAddress,
-            _milestoneDescriptions,
-            _milestoneAmounts
+            payable(msg.sender), // creator
+            address(reputationContract), // reputationContract
+            address(this), // factory
+            usdcToken, // usdcToken
+            _title, // title
+            _description, // description
+            _category, // category
+            _skillsRequired, // skillsRequired
+            _totalBudget, // totalBudget
+            _deadline, // deadline
+            _projectScopeCID, // projectScopeCID
+            _xmtpRoomId // xmtpRoomId
         );
 
-        address projectAddress = address(newProject);
+        projectAddress = address(newProject);
         allProjects.push(projectAddress);
-        projectsByClient[_client].push(projectAddress);
-        projectsByFreelancer[_freelancer].push(projectAddress);
+        isProject[projectAddress] = true; // Register the new project
 
-        emit ProjectCreated(projectAddress, _client, _freelancer);
-        return projectAddress;
+        // Register project with XMTP room mapping
+        projectsByXmtpRoom[_xmtpRoomId].push(projectAddress);
+        projectToXmtpRoom[projectAddress] = _xmtpRoomId;
+
+        emit ProjectCreated(
+            projectAddress,
+            msg.sender,
+            _title,
+            _category,
+            _totalBudget,
+            _deadline,
+            _projectScopeCID,
+            _xmtpRoomId
+        );
     }
 
-    function projectCount() external view returns (uint256) {
+    /**
+     * @notice Called by a completed Project contract to mint reputation tokens.
+     * @dev Acts as a secure controller; only registered projects can trigger mints.
+     */
+    function mintReputationForProject(
+        address recipient,
+        uint256 projectId,
+        string calldata role,
+        string calldata metadataCID
+    ) external {
+        reputationContract.mint(recipient, projectId, role, metadataCID);
+    }
+
+    function getProjectsCount() public view returns (uint256) {
         return allProjects.length;
     }
 
-    function supportsInterface(
-        bytes4 interfaceId
-    ) public view override(AccessControl) returns (bool) {
-        return super.supportsInterface(interfaceId);
+    /**
+     * @notice Get all projects associated with a specific XMTP room
+     * @param _xmtpRoomId The XMTP room ID to query
+     * @return Array of project addresses in the specified room
+     */
+    function getProjectsByXmtpRoom(
+        string memory _xmtpRoomId
+    ) public view returns (address[] memory) {
+        return projectsByXmtpRoom[_xmtpRoomId];
+    }
+
+    /**
+     * @notice Get the XMTP room ID for a specific project
+     * @param _projectAddress The project address to query
+     * @return The XMTP room ID associated with the project
+     */
+    function getXmtpRoomForProject(
+        address _projectAddress
+    ) public view returns (string memory) {
+        return projectToXmtpRoom[_projectAddress];
+    }
+
+    /**
+     * @notice Get the count of projects in a specific XMTP room
+     * @param _xmtpRoomId The XMTP room ID to query
+     * @return Number of projects in the specified room
+     */
+    function getProjectCountByXmtpRoom(
+        string memory _xmtpRoomId
+    ) public view returns (uint256) {
+        return projectsByXmtpRoom[_xmtpRoomId].length;
     }
 }
